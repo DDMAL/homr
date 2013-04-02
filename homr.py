@@ -44,6 +44,7 @@ parser.add_argument('-v', '--verbose', help='increase output verbosity', action=
 class Homr(object):
 
     feature_list = [f[0] for f in ImageBase.get_feature_functions()[0]]
+    chroma = ['a', 'b', 'c', 'd', 'e', 'f', 'g']
 
     def __init__(self, dataroot, verbose):
         '''
@@ -100,9 +101,13 @@ class Homr(object):
         training_pages (list): list of {image, mei} file paths to use for training
         '''
         
-        staff_paths = self._extract_staves(training_pages)
-        features = self._extract_features(staff_paths)
-        print features[0].shape
+        staves = self._extract_staves(training_pages)
+        self._extract_features(staves)
+
+        for s in staves:
+            print s['path']
+            print s['features'].shape
+            print s['symbols']
 
     def test(self, testing_pages):
         pass
@@ -159,18 +164,134 @@ class Homr(object):
                 staff_image = staff_image.scale(scale_factor, 1)
                 staff_path = os.path.join(image_dir, 's%d.tiff' % i)
                 staff_image.save_image(staff_path)
-                staves.append(staff_path)
+
+                transcription = self._get_symbol_labels(i, meidoc)
+
+                staves.append({'path': staff_path, 'symbols': transcription})
 
         return staves
+           
+    def _get_symbol_labels(self, staff_index, meidoc):
+        '''
+        Calculate the sequence of symbol labels for the given system
+        in the mei document. Episema are ignored for now.
+
+        @see get_staff_pos
+        clef labels: <shape>clef.<staff_pos>
+        division labels: <form>division
+        custos labels: custos.<staff_pos>
+        neume: <name>.<staff_pos>[d][.<staff_pos>[d] ...]   (d denotes a dot)
+
+        PARAMETERS
+        ----------
+        staff_index (int): system index on the page
+        meidoc (MeiDocument): pymei document within which to search systems
+        '''
+
+        # retrieve list of MeiElements that correspond to glyphs between system breaks
+        symbol_types = ['clef', 'neume', 'custos', 'division']
+
+        flat_tree = meidoc.getFlattenedTree()
+        sbs = meidoc.getElementsByName('sb')
+        start_sb_pos = meidoc.getPositionInDocument(sbs[staff_index])
+        if staff_index+1 < len(sbs):
+            end_sb_pos = meidoc.getPositionInDocument(sbs[staff_index+1])
+        else:
+            end_sb_pos = len(flat_tree)
             
+        symbols = [s for s in flat_tree[start_sb_pos+1:end_sb_pos] if s.getName() in symbol_types]
+
+        symbol_labels = []
+        acting_clef = None
+        for s in symbols:
+            if s.getName() == 'clef':
+                clef_shape = s.getAttribute('shape').value.lower()
+                position = (int(s.getAttribute('line').value) - 4) * 2
+                sname = '%sclef.%d' % (clef_shape, position)
+                acting_clef = s
+            elif s.getName() == 'division':
+                form = s.getAttribute('form').value.lower()
+                sname = '%sdivision' % form
+            elif s.getName() == 'custos':
+                pname = s.getAttribute('pname').value
+                oct = int(s.getAttribute('oct').value)
+                staff_pos = Homr.get_staff_pos(pname, oct, acting_clef)
+                sname = 'custos.%d' % staff_pos
+            elif s.getName() == 'neume':
+                name = s.getAttribute('name').value.lower()
+                sname = name
+
+                notes = s.getDescendantsByName('note')
+                for n in notes:
+                    pname = n.getAttribute('pname').value
+                    oct = int(n.getAttribute('oct').value)
+                    staff_pos = Homr.get_staff_pos(pname, oct, acting_clef)
+                    sname += '.%d' % staff_pos
+
+                    if n.hasChildren('dot'):
+                        sname += 'd'
+            else:
+                continue
+
+            symbol_labels.append(sname)
+
+        return symbol_labels
+
+    @staticmethod
+    def get_staff_pos(pname, oct, acting_clef=None):
+        '''
+        Returns the numerical position of the pitch (in steps) relative to the top 
+        line of the staff. For example, if the clef is a 'c' on the 2nd line from 
+        the top and a punctum neume (pname='a', oct=3) follows this clef, the punctum 
+        will be assigned the staff position of -4 because it is 4 steps down from the 
+        top line of the staff. In this way, the position of a note is represented with respect
+        to the staff lines, not the clef.
+
+        PARAMETERS
+        ----------
+        pname (String): pitch name of the note
+        oct (int): octave of the note
+        acting_clef (MeiElement:clef): acting clef (the last clef before the note)
+        '''
+        
+        if not acting_clef:
+            raise ValueError('An acting clef can not be found, check mei structure.')
+
+        clef_shape = acting_clef.getAttribute('shape').value.lower()
+        if clef_shape == 'c':
+            clef_oct = 4
+        elif clef_shape == 'f':
+            clef_oct = 3
+        else:
+            raise ValueError('Unknown clef shape!')
+
+        num_chroma = len(Homr.chroma)
+
+        # make root note search in relation to clef index
+        i_clef = Homr.chroma.index(clef_shape)
+        i_pitch = Homr.chroma.index(pname)
+        c_ind = Homr.chroma.index('c')
+
+        clef_diff = i_pitch - i_clef + num_chroma*(oct - clef_oct)
+        if i_pitch < c_ind:
+            clef_diff += num_chroma
+
+        clef_staff_pos = (int(acting_clef.getAttribute('line').value) - 4) * 2
+        staff_pos = clef_staff_pos + clef_diff
+
+        return staff_pos
+
     def _extract_features(self, staves, w=2, r=0, feature_names=feature_list):
         '''
         Perform feature extraction on sliding analysis windows
         of each staff.
 
+        Note: this function modifies the staves list of dictionaries to include a features key.
+              This modifies the staves list outside the scope of this function.
+
         PARAMETERS
         ----------
-        staves (list of strings): paths to created staff image files
+        staves (list of {image_path, symbol transcription})
         w (int): width of analysis window in pixels
         r (int): number of overlapping pixels each time the window is moved
                  Thus, the hopsize = w-r.
@@ -186,10 +307,10 @@ class Homr(object):
         feature_names.sort()
         features_info = ImageBase.get_feature_functions(feature_names)
         features_dimensionality = features_info[1]
-        training_features = [] # features across analysis windows for each staff image input
 
         # extract features for each staff
-        for staff_path in staves:
+        for s in staves:
+            staff_path = s['path']
             staff = load_image(staff_path)
             staff_width = staff.ncols
             staff_height = staff.nrows
@@ -216,9 +337,9 @@ class Homr(object):
 
                     offset += dimensionality
 
-            training_features.append(staff_features)
+            s['features'] = staff_features
 
-        return training_features
+        return staves
 
 if __name__ == "__main__":
     # parse command line arguments
