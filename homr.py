@@ -1,3 +1,5 @@
+from __future__ import division
+
 '''
 Copyright (C) 2013 Gregory Burlet
 
@@ -20,10 +22,17 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 '''
 
-from __future__ import division
+'''
+Optical Music Recognition (OMR) using a speech recognition approach.
+For more explanation, see Pugin, L. 2006. Optical Music Recognition of Early 
+Typographic Prints using Hidden Markov Models. In Proceedings of the 
+International Society for Music Information Retrieval Conference.
+'''
+
 import os
 import argparse
 from gamera.core import *
+import gamera.plugins.features as gfeatures
 import numpy as np
 from pymei import XmlImport
 
@@ -33,6 +42,8 @@ parser.add_argument('dataroot', help='path to the dataset')
 parser.add_argument('-v', '--verbose', help='increase output verbosity', action='store_true')
 
 class Homr(object):
+
+    feature_list = [f[0] for f in ImageBase.get_feature_functions()[0]]
 
     def __init__(self, dataroot, verbose):
         '''
@@ -72,6 +83,9 @@ class Homr(object):
 
         split_ind = int(train_proportion * len(pages))
         training_pages = pages[0:split_ind]
+        if len(training_pages) < 1:
+            raise ValueError('Invalid training proportion: no pages to train with')
+
         testing_pages = pages[split_ind:]
 
         self.train(training_pages)
@@ -87,6 +101,8 @@ class Homr(object):
         '''
         
         staff_paths = self._extract_staves(training_pages)
+        features = self._extract_features(staff_paths)
+        print features[0].shape
 
     def test(self, testing_pages):
         pass
@@ -147,22 +163,66 @@ class Homr(object):
 
         return staves
             
-    def _extract_features(self, win_width=2, h=win_width):
+    def _extract_features(self, staves, w=2, r=0, feature_names=feature_list):
         '''
         Perform feature extraction on sliding analysis windows
         of each staff.
 
         PARAMETERS
         ----------
-        win_width (int): width of analysis window in pixels
-        h (int): pixel hop size of sliding window
+        staves (list of strings): paths to created staff image files
+        w (int): width of analysis window in pixels
+        r (int): number of overlapping pixels each time the window is moved
+                 Thus, the hopsize = w-r.
+        feature_names (list of strings): list of gamera feature function names to be run on each analysis window.
+            List of feature function names:
+                [black_area, moments, nholes, nholes_extended, volume, area, aspect_ratio, 
+                 nrows_feature,ncols_feature, compactness, volume16regions, volume64regions,
+                 zernike_moments, skeleton_features, top_bottom, diagonal_projection]
         '''
 
-        pass
+        # get feature function information
+        # if an invalid feature name is specified, raises ValueError
+        feature_names.sort()
+        features_info = ImageBase.get_feature_functions(feature_names)
+        features_dimensionality = features_info[1]
+        training_features = [] # features across analysis windows for each staff image input
+
+        # extract features for each staff
+        for staff_path in staves:
+            staff = load_image(staff_path)
+            staff_width = staff.ncols
+            staff_height = staff.nrows
+            
+            num_wins = int((staff_width - w) / (w - r)) + 1
+            staff_features = np.zeros([features_dimensionality, num_wins])
+
+            # calculate features for each analysis window along the staff
+            # each feature function may return more than one feature
+            for i in range(num_wins):
+                ulx = i * (w - r)
+                lrx = ulx + w
+
+                window_img = staff.subimage(Point(ulx,0), Point(lrx-1, staff_height-1))
+                
+                # extract the desired features
+                offset = 0
+                for f in features_info[0]:
+                    feature_name = f[0]
+                    feature_func = f[1]
+                    dimensionality = feature_func.return_type.length
+                    features = feature_func.__call__(window_img)
+                    staff_features[offset:offset+dimensionality, i] = features
+
+                    offset += dimensionality
+
+            training_features.append(staff_features)
+
+        return training_features
 
 if __name__ == "__main__":
     # parse command line arguments
     args = parser.parse_args()
 
     homr = Homr(args.dataroot, args.verbose)
-    homr.run_experiment1(0.8)
+    homr.run_experiment1(0.02)
