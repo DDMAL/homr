@@ -104,13 +104,30 @@ class Homr(object):
         staves = self._extract_staves(training_pages)
         self._extract_features(staves)
 
-        for s in staves:
-            print s['path']
-            print s['features'].shape
-            print s['symbols']
+        # at this point staves is a list of dictionaries
+        # each element s has s['path'], s['features'], and s['symbols']   
+
+        dictionary = self._get_dictionary([s['symbols'] for s in staves])
+        num_hmms = len(dictionary)
 
     def test(self, testing_pages):
         pass
+
+    def _get_dictionary(self, staves_symbols):
+        '''
+        Generate a list of sorted and unique symbols
+        for the dataset.
+
+        PARAMETERS
+        ----------
+        staves_symbols: list of symbol transcriptions for each staff in the dataset
+        '''
+
+        dictionary = [symbol for staff_symbols in symbols for symbol in staff_symbols]
+        dictionary = list(set(dictionary)) # remove duplicates
+        dictionary.sort() # alphabetize
+
+        return dictionary
 
     def _extract_staves(self, pages, bb_padding_in=0.4):
         '''
