@@ -39,6 +39,7 @@ from pymei import XmlImport
 # set up command line argument structure
 parser = argparse.ArgumentParser(description='Perform experiment reporting performance of the measure finding algorithm.')
 parser.add_argument('dataroot', help='path to the dataset')
+parser.add_argument('outputpath', help='path to place htk intermediary output')
 parser.add_argument('-v', '--verbose', help='increase output verbosity', action='store_true')
 
 class Homr(object):
@@ -46,7 +47,7 @@ class Homr(object):
     feature_list = [f[0] for f in ImageBase.get_feature_functions()[0]]
     chroma = ['a', 'b', 'c', 'd', 'e', 'f', 'g']
 
-    def __init__(self, dataroot, verbose):
+    def __init__(self, dataroot, outputpath, verbose):
         '''
         Creates an object capable of training/testing a hidden Markov model (HMM),
         given a set of images (with corresponding) mei in neume notation.
@@ -54,9 +55,11 @@ class Homr(object):
         PARAMETERS
         ----------
         dataroot (String): location of the training/testing data
+        outputpath (String): location of the intermediary output for htk
         '''
 
         self.dataroot = dataroot
+        self.output_path = outputpath
         self.verbose = verbose
 
         init_gamera()
@@ -110,6 +113,8 @@ class Homr(object):
         dictionary = self._get_dictionary([s['symbols'] for s in staves])
         num_hmms = len(dictionary)
 
+        self._create_label_file(staves)
+
     def test(self, testing_pages):
         pass
 
@@ -123,11 +128,33 @@ class Homr(object):
         staves_symbols: list of symbol transcriptions for each staff in the dataset
         '''
 
-        dictionary = [symbol for staff_symbols in symbols for symbol in staff_symbols]
+        dictionary = [symbol for staff_symbols in staves_symbols for symbol in staff_symbols] # flatten list
         dictionary = list(set(dictionary)) # remove duplicates
         dictionary.sort() # alphabetize
 
         return dictionary
+
+    def _create_label_file(self, staves):
+        '''
+        Create an htk Master Label File (.mlf) for a list of symbol 
+        transcriptions for each staff in the dataset.
+
+        PARAMETERS
+        ----------
+        staves: list of staves (paths, features, symbol transcriptions)
+        '''
+
+        mlf = '#!MLF!#\n'
+        for s in staves:
+            _, image_filename = os.path.split(s['path'])
+            filename, _ = os.path.splitext(image_filename)
+            mlf += '"*/%s.lab"\n' % filename
+            mlf += 'sil\n'
+            for symbol in s['symbols']:
+                mlf += '%s\n' % symbol
+            mlf += 'sil\n.\n'
+
+        return mlf
 
     def _extract_staves(self, pages, bb_padding_in=0.4):
         '''
@@ -166,8 +193,6 @@ class Homr(object):
                 'lry': int(z.getAttribute('lry').value) + bb_padding_px
             } for z in gt_system_zones]
 
-            # get image directory
-            image_dir, _ = os.path.split(p['image'])
             # obtain an image of the staff, scaled to be 100px tall
             for i, bb in enumerate(s_bb):
                 staff_image = image.subimage(Point(bb['ulx'], bb['uly']), Point(bb['lrx'], bb['lry']))
@@ -179,7 +204,7 @@ class Homr(object):
                 # scale to be 100px tall, maintaining aspect ratio
                 scale_factor = 100 / staff_image.nrows
                 staff_image = staff_image.scale(scale_factor, 1)
-                staff_path = os.path.join(image_dir, 's%d.tiff' % i)
+                staff_path = os.path.join(self.output_path, 'data', 's%d.tiff' % len(staves))
                 staff_image.save_image(staff_path)
 
                 transcription = self._get_symbol_labels(i, meidoc)
@@ -362,5 +387,5 @@ if __name__ == "__main__":
     # parse command line arguments
     args = parser.parse_args()
 
-    homr = Homr(args.dataroot, args.verbose)
-    homr.run_experiment1(0.02)
+    homr = Homr(args.dataroot, args.outputpath, args.verbose)
+    homr.run_experiment1(0.04)
