@@ -34,12 +34,16 @@ import argparse
 from gamera.core import *
 import gamera.plugins.features as gfeatures
 import numpy as np
+import struct
 from pymei import XmlImport
 
 # set up command line argument structure
 parser = argparse.ArgumentParser(description='Perform experiment reporting performance of the measure finding algorithm.')
 parser.add_argument('dataroot', help='path to the dataset')
 parser.add_argument('outputpath', help='path to place htk intermediary output')
+# TODO: add cmd line arguments for window parameters
+#parser.add_argument('-w', '--winwidth', help='width of analysis window in pixels')
+#parser.add_argument('-r', '--winoverlap', help='number of overlapping pixels each time the window is moved')
 parser.add_argument('-v', '--verbose', help='increase output verbosity', action='store_true')
 
 class Homr(object):
@@ -47,7 +51,7 @@ class Homr(object):
     feature_list = [f[0] for f in ImageBase.get_feature_functions()[0]]
     chroma = ['a', 'b', 'c', 'd', 'e', 'f', 'g']
 
-    def __init__(self, dataroot, outputpath, verbose):
+    def __init__(self, dataroot, outputpath=None, verbose=False):
         '''
         Creates an object capable of training/testing a hidden Markov model (HMM),
         given a set of images (with corresponding) mei in neume notation.
@@ -59,8 +63,11 @@ class Homr(object):
         '''
 
         self.dataroot = dataroot
-        self.output_path = outputpath
+        self.outputpath = outputpath
         self.verbose = verbose
+
+        # set after analysis
+        self._feature_dims = 0
 
         init_gamera()
 
@@ -154,6 +161,11 @@ class Homr(object):
                 mlf += '%s\n' % symbol
             mlf += 'sil\n.\n'
 
+        # write master label file
+        label_path = os.path.join(self.outputpath, 'symbols.mlf')
+        with open(label_path, 'w') as f:
+            f.write(mlf)
+
         return mlf
 
     def _extract_staves(self, pages, bb_padding_in=0.4):
@@ -204,7 +216,7 @@ class Homr(object):
                 # scale to be 100px tall, maintaining aspect ratio
                 scale_factor = 100 / staff_image.nrows
                 staff_image = staff_image.scale(scale_factor, 1)
-                staff_path = os.path.join(self.output_path, 'data', 's%d.tiff' % len(staves))
+                staff_path = os.path.join(self.outputpath, 'data', 's%d.tiff' % len(staves))
                 staff_image.save_image(staff_path)
 
                 transcription = self._get_symbol_labels(i, meidoc)
@@ -348,7 +360,7 @@ class Homr(object):
         # if an invalid feature name is specified, raises ValueError
         feature_names.sort()
         features_info = ImageBase.get_feature_functions(feature_names)
-        features_dimensionality = features_info[1]
+        self._feature_dims = features_info[1]
 
         # extract features for each staff
         for s in staves:
@@ -358,7 +370,7 @@ class Homr(object):
             staff_height = staff.nrows
             
             num_wins = int((staff_width - w) / (w - r)) + 1
-            staff_features = np.zeros([features_dimensionality, num_wins])
+            staff_features = np.zeros([self._feature_dims, num_wins])
 
             # calculate features for each analysis window along the staff
             # each feature function may return more than one feature
@@ -378,6 +390,39 @@ class Homr(object):
                     staff_features[offset:offset+dimensionality, i] = features
 
                     offset += dimensionality
+            
+            # write binary feature file for the staff image being processed
+            # the struct module is used to ensure proper bit padding
+            filename = os.path.split(os.path.splitext(s['path'])[0])[1]
+            feature_path = os.path.join(self.outputpath, 'train', '%s.mfc' % filename)
+            with open(feature_path, 'wb') as f:
+                '''
+                write header
+                nSamples - number of samples in file (4-byte integer)
+                sampPeriod - sample period in pixels (4-byte integer)
+                sampSize - number of bytes per sample (2-byte integer)
+                parmKind - a code indicating the sample kind (2-byte integer)
+                '''
+                n_samples = staff_features.shape[1]
+                samp_period = w-r 
+                samp_size = self._feature_dims * 4 # 4 byte float
+                parm_kind = 9 # USER_DEFINED
+                
+                header = struct.pack('>iihh', n_samples, samp_period, samp_size, parm_kind)
+                f.write(header)
+
+                '''
+                write parameter vector for each sample
+                "Each sample is a vector of 2-byte integers or 4-byte floats." -- htk book
+                '''
+                bin_data = bytearray()
+                # for each sample
+                for j in range(n_samples):
+                    # for each feature
+                    for i in range(self._feature_dims):
+                        feature = struct.pack('>f', staff_features[i,j])
+                        bin_data.extend(feature)
+                f.write(bin_data)
 
             s['features'] = staff_features
 
@@ -388,4 +433,4 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     homr = Homr(args.dataroot, args.outputpath, args.verbose)
-    homr.run_experiment1(0.04)
+    homr.run_experiment1(0.02)
