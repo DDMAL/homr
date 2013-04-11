@@ -228,7 +228,13 @@ class Homr(object):
                 # scale to be 100px tall, maintaining aspect ratio
                 scale_factor = 100 / staff_image.nrows
                 staff_image = staff_image.scale(scale_factor, 1)
-                staff_path = os.path.join(self.outputpath, 'data', 's%d.tiff' % len(staves))
+
+                # create staff data directory if it does not already exist
+                staff_data_path = os.path.join(self.outputpath, 'data')
+                if not os.path.exists(staff_data_path):
+                    os.makedirs(staff_data_path)
+
+                staff_path = os.path.join(staff_data_path, 's%d.tiff' % len(staves))
                 staff_image.save_image(staff_path)
 
                 transcription = self._get_symbol_labels(i, meidoc)
@@ -374,6 +380,12 @@ class Homr(object):
         features_info = ImageBase.get_feature_functions(feature_names)
         self._feature_dims = features_info[1]
 
+        # create training data directory if it does not already exist
+        train_data_path = os.path.join(self.outputpath, 'train')
+        if not os.path.exists(train_data_path):
+            os.makedirs(train_data_path)
+
+
         # extract features for each staff
         for s in staves:
             staff_path = s['path']
@@ -406,7 +418,7 @@ class Homr(object):
             # write binary feature file for the staff image being processed
             # the struct module is used to ensure proper bit padding
             filename = os.path.split(os.path.splitext(s['path'])[0])[1]
-            feature_path = os.path.join(self.outputpath, 'train', '%s.mfc' % filename)
+            feature_path = os.path.join(train_data_path, '%s.mfc' % filename)
             with open(feature_path, 'wb') as f:
                 '''
                 write header
