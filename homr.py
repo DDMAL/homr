@@ -27,8 +27,10 @@ Optical Music Recognition (OMR) using a speech recognition approach.
 For more explanation, see Pugin, L. 2006. Optical Music Recognition of Early 
 Typographic Prints using Hidden Markov Models. In Proceedings of the 
 International Society for Music Information Retrieval Conference.
-'''
 
+Note: in the comments, the word system and staff are used interchangeably,
+since in the context of the HMM, the systems are assumed to be i.i.d
+'''
 import os
 import argparse
 from gamera.core import *
@@ -41,9 +43,8 @@ from pymei import XmlImport
 parser = argparse.ArgumentParser(description='Perform experiment reporting performance of the measure finding algorithm.')
 parser.add_argument('dataroot', help='path to the dataset')
 parser.add_argument('outputpath', help='path to place htk intermediary output')
-# TODO: add cmd line arguments for window parameters
-#parser.add_argument('-w', '--winwidth', help='width of analysis window in pixels')
-#parser.add_argument('-r', '--winoverlap', help='number of overlapping pixels each time the window is moved')
+parser.add_argument('-w', '--winwidth', type=int, help='width of analysis window in pixels')
+parser.add_argument('-r', '--winoverlap', type=int, help='number of overlapping pixels each time the window is moved')
 parser.add_argument('-v', '--verbose', help='increase output verbosity', action='store_true')
 
 class Homr(object):
@@ -51,7 +52,7 @@ class Homr(object):
     feature_list = [f[0] for f in ImageBase.get_feature_functions()[0]]
     chroma = ['a', 'b', 'c', 'd', 'e', 'f', 'g']
 
-    def __init__(self, dataroot, outputpath=None, verbose=False):
+    def __init__(self, dataroot, outputpath, w, r, verbose=False):
         '''
         Creates an object capable of training/testing a hidden Markov model (HMM),
         given a set of images (with corresponding) mei in neume notation.
@@ -60,11 +61,25 @@ class Homr(object):
         ----------
         dataroot (String): location of the training/testing data
         outputpath (String): location of the intermediary output for htk
+        w (int): width of analysis window in pixels
+        r (int): number of overlapping pixels each time the window is moved
+                 Therefore, the hopsize is w - r.
         '''
 
         self.dataroot = dataroot
         self.outputpath = outputpath
         self.verbose = verbose
+
+        # set default sliding window parameters
+        if w:
+            self.w = w
+        else:
+            self.w = 2
+
+        if r:
+            self.r = r
+        else:
+            self.r = 0
 
         # set after analysis
         self._feature_dims = 0
@@ -113,14 +128,17 @@ class Homr(object):
         
         staves = self._extract_staves(training_pages)
         self._extract_features(staves)
-
-        # at this point staves is a list of dictionaries
+        # at this point 'staves' is a list of dictionaries
         # each element s has s['path'], s['features'], and s['symbols']   
 
         dictionary = self._get_dictionary([s['symbols'] for s in staves])
         num_hmms = len(dictionary)
 
         self._create_label_file(staves)
+
+        symbol_widths = self._get_symbol_widths(training_pages)
+
+        self._create_hmm_file(staves, symbol_widths)
 
     def test(self, testing_pages):
         pass
@@ -167,18 +185,6 @@ class Homr(object):
             f.write(mlf)
 
         return mlf
-
-    def _create_hmm_file(self, staves):
-        '''
-        Create a file that describes the structure and initial
-        parameters of the HMMs.
-        '''
-
-        hmm_path = os.path.join(self.outputpath, 'proto.txt')
-        with open(hmm_path, 'w') as f:
-            # macros
-            write('~o <VecSize> %d\n<USER>' % self._feature_dims)
-            write('~h "proto"\n')
 
     def _extract_staves(self, pages, bb_padding_in=0.4):
         '''
@@ -246,7 +252,8 @@ class Homr(object):
     def _get_symbol_labels(self, staff_index, meidoc):
         '''
         Calculate the sequence of symbol labels for the given system
-        in the mei document. Episema are ignored for now.
+        in the mei document. 
+        TODO: Episema.
 
         @see get_staff_pos
         clef labels: <shape>clef.<staff_pos>
@@ -309,6 +316,63 @@ class Homr(object):
 
         return symbol_labels
 
+    def _get_symbol_widths(self, pages):
+        '''
+        Calculate the average pixel width of each symbol from a set of pages.
+
+        PARAMETERS
+        ----------
+        pages (list): a list of pages
+        '''
+        
+        # TODO: make this a global var, since it is used in more than one function now
+        symbol_types = ['clef', 'neume', 'custos', 'division']
+
+        # dict of symbol_name -> [cumulative_width_sum, num_occurences]
+        symbol_widths = {}
+
+        for p in pages:
+            meidoc = XmlImport.documentFromFile(p['mei'])
+            num_systems = len(meidoc.getElementsByName('system'))
+
+            flat_tree = meidoc.getFlattenedTree()
+            sbs = meidoc.getElementsByName('sb')
+
+            # for each system
+            # important: need to iterate system by system because the class labels depend on the acting clef
+            for staff_index in range(num_systems):
+                labels = self._get_symbol_labels(staff_index, meidoc)
+
+                # retrieve list of MeiElements that correspond to glyphs between system breaks
+                start_sb_pos = meidoc.getPositionInDocument(sbs[staff_index])
+                if staff_index+1 < len(sbs):
+                    end_sb_pos = meidoc.getPositionInDocument(sbs[staff_index+1])
+                else:
+                    end_sb_pos = len(flat_tree)
+                    
+                symbols = [s for s in flat_tree[start_sb_pos+1:end_sb_pos] if s.getName() in symbol_types]
+
+                # get bounding box information for each symbol belonging this system
+                symbol_zones = [meidoc.getElementById(s.getAttribute('facs').value)
+                                    for s in symbols if s.hasAttribute('facs')]
+
+                for l, z in zip(labels, symbol_zones):
+                    ulx = int(z.getAttribute('ulx').value)
+                    lrx = int(z.getAttribute('lrx').value)
+                    
+                    if l in symbol_widths:
+                        symbol_widths[l][0] += (lrx - ulx)
+                        symbol_widths[l][1] += 1
+                    else:
+                        symbol_widths[l] = [lrx - ulx, 1]
+
+        # calculate average symbol widths across all training pages
+        # rounding to the nearest pixel
+        for s in symbol_widths:
+            symbol_widths[s] = int(round(symbol_widths[s][0] / symbol_widths[s][1]))
+
+        return symbol_widths
+
     @staticmethod
     def get_staff_pos(pname, oct, acting_clef=None):
         '''
@@ -353,7 +417,7 @@ class Homr(object):
 
         return staff_pos
 
-    def _extract_features(self, staves, w=2, r=0, feature_names=feature_list):
+    def _extract_features(self, staves, feature_names=feature_list):
         '''
         Perform feature extraction on sliding analysis windows
         of each staff.
@@ -364,9 +428,6 @@ class Homr(object):
         PARAMETERS
         ----------
         staves (list of {image_path, symbol transcription})
-        w (int): width of analysis window in pixels
-        r (int): number of overlapping pixels each time the window is moved
-                 Thus, the hopsize = w-r.
         feature_names (list of strings): list of gamera feature function names to be run on each analysis window.
             List of feature function names:
                 [black_area, moments, nholes, nholes_extended, volume, area, aspect_ratio, 
@@ -393,14 +454,14 @@ class Homr(object):
             staff_width = staff.ncols
             staff_height = staff.nrows
             
-            num_wins = int((staff_width - w) / (w - r)) + 1
+            num_wins = int((staff_width - self.w) / (self.w - self.r)) + 1
             staff_features = np.zeros([self._feature_dims, num_wins])
 
             # calculate features for each analysis window along the staff
             # each feature function may return more than one feature
             for i in range(num_wins):
-                ulx = i * (w - r)
-                lrx = ulx + w
+                ulx = i * (self.w - self.r)
+                lrx = ulx + self.w
 
                 window_img = staff.subimage(Point(ulx,0), Point(lrx-1, staff_height-1))
                 
@@ -428,7 +489,7 @@ class Homr(object):
                 parmKind - a code indicating the sample kind (2-byte integer)
                 '''
                 n_samples = staff_features.shape[1]
-                samp_period = w-r 
+                samp_period = self.w - self.r 
                 samp_size = self._feature_dims * 4 # 4 byte float
                 parm_kind = 9 # USER_DEFINED
                 
@@ -456,5 +517,5 @@ if __name__ == "__main__":
     # parse command line arguments
     args = parser.parse_args()
 
-    homr = Homr(args.dataroot, args.outputpath, args.verbose)
+    homr = Homr(args.dataroot, args.outputpath, args.winwidth, args.winoverlap, args.verbose)
     homr.run_experiment1(0.02)
