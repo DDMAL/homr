@@ -168,6 +168,18 @@ class Homr(object):
 
         return mlf
 
+    def _create_hmm_file(self, staves):
+        '''
+        Create a file that describes the structure and initial
+        parameters of the HMMs.
+        '''
+
+        hmm_path = os.path.join(self.outputpath, 'proto.txt')
+        with open(hmm_path, 'w') as f:
+            # macros
+            write('~o <VecSize> %d\n<USER>' % self._feature_dims)
+            write('~h "proto"\n')
+
     def _extract_staves(self, pages, bb_padding_in=0.4):
         '''
         Extracts the staves from the image given the bounding
