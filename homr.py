@@ -71,15 +71,8 @@ class Homr(object):
         self.verbose = verbose
 
         # set default sliding window parameters
-        if w:
-            self.w = w
-        else:
-            self.w = 2
-
-        if r:
-            self.r = r
-        else:
-            self.r = 0
+        self.w = w if w else 2
+        self.r = r if r else 0
 
         # set after analysis
         self._feature_dims = 0
@@ -97,8 +90,11 @@ class Homr(object):
         train_proportion (float): fraction of data to use for training
         '''
 
+        if self.verbose:
+            print 'gathering training and testing data ...'
+
         pages = []
-        for dirpath, dirnames, filenames in os.walk(self.dataroot):
+        for dirpath, dirnames, filenames in os.walk(self.dataroot, followlinks=True):
             image_filename = [f for f in filenames if f.endswith("_original_image.tiff")]
             mei_filename = [f for f in filenames if f.endswith("_corr.mei")]
             if mei_filename and image_filename:
@@ -106,6 +102,9 @@ class Homr(object):
                     'image': os.path.join(dirpath, image_filename[0]),
                     'mei': os.path.join(dirpath, mei_filename[0])
                 })
+
+        if self.verbose:
+            print '\tNumber of pages: %d' % len(pages)
 
         split_ind = int(train_proportion * len(pages))
         training_pages = pages[0:split_ind]
@@ -126,24 +125,34 @@ class Homr(object):
         training_pages (list): list of {image, mei} file paths to use for training
         '''
         
+        if self.verbose:
+            print 'extracting staves ...'
         staves = self._extract_staves(training_pages)
+
+        if self.verbose:
+            print 'extracting features ...'
         self._extract_features(staves)
         # at this point 'staves' is a list of dictionaries
         # each element s has s['path'], s['features'], and s['symbols']   
 
-        dictionary = self._get_dictionary([s['symbols'] for s in staves])
-        num_hmms = len(dictionary)
+        if self.verbose:
+            print 'generating dictionary ...'
+        dictionary = self._create_dictionary_file([s['symbols'] for s in staves], True)
 
+        if self.verbose:
+            print 'creating symbol transcriptions ...'
         self._create_label_file(staves)
 
         symbol_widths = self._get_symbol_widths(training_pages)
 
+        if self.verbose:
+            print 'generating hmm topologies ...'
         self._create_hmm_file(staves, symbol_widths)
 
     def test(self, testing_pages):
         pass
 
-    def _get_dictionary(self, staves_symbols):
+    def _create_dictionary_file(self, staves_symbols, inc_sil=False, inc_sp=False):
         '''
         Generate a list of sorted and unique symbols
         for the dataset.
@@ -151,11 +160,23 @@ class Homr(object):
         PARAMETERS
         ----------
         staves_symbols: list of symbol transcriptions for each staff in the dataset
+        inc_sil (bool): include silence symbol
+        inc_sp (bool): include short pause symbol
         '''
 
         dictionary = [symbol for staff_symbols in staves_symbols for symbol in staff_symbols] # flatten list
         dictionary = list(set(dictionary)) # remove duplicates
+        if inc_sil:
+            # add silience symbol
+            dictionary.append('sil')
+        if inc_sp:
+            # add short pause symbol
+            dictionary.append('sp')
         dictionary.sort() # alphabetize
+
+        dict_path = os.path.join(self.outputpath, 'dictionary')
+        with open(dict_path, 'w') as f:
+            f.write('\n'.join(dictionary))
 
         return dictionary
 
@@ -186,6 +207,72 @@ class Homr(object):
 
         return mlf
 
+    def _create_hmm_file(self, staves, symbol_widths):
+        '''
+        Create a file that describes the structure and initial
+        parameters of the HMMs.
+
+        PARAMETERS
+        ----------
+        staves: list of staves in the training pages
+        symbol_widths (dict) {symbol_name -> average_width}
+        '''
+
+        hmm_path = os.path.join(self.outputpath, 'hmm0')
+        if not os.path.exists(hmm_path):
+            os.makedirs(hmm_path)
+        hmm_def_path = os.path.join(hmm_path, 'hmmdefs')
+
+        # add silence symbol having 3 states
+        symbol_widths['sil'] = 3 * (self.w - self.r)
+
+        # calculate initial mean and variance paramaters
+        # replicates the output of the HCompV tool (global mean/var)
+        # (easier to just do it internally rather than making a system call
+        # and concatenating output files
+        staff_means = np.zeros([self._feature_dims, len(staves)])
+        staff_variances = np.zeros([self._feature_dims, len(staves)])
+        for i, s in enumerate(staves):
+            staff_means[:,i] = s['features'].mean(axis=1)
+            staff_variances[:,i] = s['features'].var(axis=1)
+
+        # aggregate statistics over all staves
+        init_mean = np.nan_to_num(staff_means.mean(axis=1))
+        init_var = np.nan_to_num(staff_variances.mean(axis=1))
+        var_floor = np.nan_to_num(init_var * 0.01)
+        
+        # calculate variances for each staff
+        with open(hmm_def_path, 'w') as f:
+            # write macros
+            macro = '~o\n\t<VecSize> %d\n\t<USER>\n' % self._feature_dims
+            macro += '~v "varFloor1"\n\t<Variance> %d\n\t\t%s\n' % (self._feature_dims, ' '.join(['%E' % v for v in list(var_floor)]))
+            f.write(macro)
+
+            # define hmm for each symbol
+            for s in sorted(symbol_widths.iterkeys()):
+                # calculate number of states of the HMM according to pugin2006
+                # add first and last terminal states (do not have an emission distribution)
+                num_states = int(round(symbol_widths[s] / (self.w - self.r))) + 2
+                hmm_def = '~h "%s"\n\t<BeginHMM>\n\t\t<NumStates> %d\n' % (s, num_states)
+
+                for i in range(2,num_states):
+                    hmm_def += '\t\t<State> %d\n' % i
+                    hmm_def += '\t\t\t<Mean> %d\n\t\t\t\t%s\n' % (self._feature_dims, ' '.join(['%E' % m for m in list(init_mean)]))
+                    hmm_def += '\t\t\t<Variance> %d\n\t\t\t\t%s\n' % (self._feature_dims, ' '.join(['%E' % v for v in list(init_var)]))
+
+                # initial transition matrix with equal transition probabilities
+                # enforce left-to-right structure
+                trans = np.zeros([num_states, num_states])
+                trans[0,1] = 1.0
+                for i in range(1,num_states-1):
+                    trans[i,i:] = 1/(num_states-i)
+                hmm_def += '\t\t<TransP> %d\n' % num_states
+                for row in trans:
+                    hmm_def += '\t\t\t%s\n' % ' '.join(['%E' % p for p in list(row)])
+
+                hmm_def += '\t<EndHMM>\n'
+                f.write(hmm_def)
+
     def _extract_staves(self, pages, bb_padding_in=0.4):
         '''
         Extracts the staves from the image given the bounding
@@ -208,6 +295,9 @@ class Homr(object):
             else:
                 image_dpi = image.resolution
 
+            image_name = os.path.splitext(os.path.split(p['image'])[1])[0]
+            page_name = image_name.split('_')[0]
+
             # calculate number of pixels the system padding should be
             bb_padding_px = int(bb_padding_in * image_dpi)
 
@@ -224,28 +314,36 @@ class Homr(object):
             } for z in gt_system_zones]
 
             # obtain an image of the staff, scaled to be 100px tall
+            num_errors = 0
             for i, bb in enumerate(s_bb):
-                staff_image = image.subimage(Point(bb['ulx'], bb['uly']), Point(bb['lrx'], bb['lry']))
+                try:
+                    staff_image = image.subimage(Point(bb['ulx'], bb['uly']), Point(bb['lrx'], bb['lry']))
 
-                # binarize and despeckle
-                staff_image = staff_image.to_onebit()
-                staff_image.despeckle(100)
+                    # binarize and despeckle
+                    staff_image = staff_image.to_onebit()
+                    staff_image.despeckle(100)
 
-                # scale to be 100px tall, maintaining aspect ratio
-                scale_factor = 100 / staff_image.nrows
-                staff_image = staff_image.scale(scale_factor, 1)
+                    # scale to be 100px tall, maintaining aspect ratio
+                    scale_factor = 100 / staff_image.nrows
+                    staff_image = staff_image.scale(scale_factor, 1)
 
-                # create staff data directory if it does not already exist
-                staff_data_path = os.path.join(self.outputpath, 'data')
-                if not os.path.exists(staff_data_path):
-                    os.makedirs(staff_data_path)
+                    # create staff data directory if it does not already exist
+                    staff_data_path = os.path.join(self.outputpath, 'data')
+                    if not os.path.exists(staff_data_path):
+                        os.makedirs(staff_data_path)
 
-                staff_path = os.path.join(staff_data_path, 's%d.tiff' % len(staves))
-                staff_image.save_image(staff_path)
+                    staff_path = os.path.join(staff_data_path, '%s_s%d.tiff' % (page_name, len(staves)))
+                    staff_image.save_image(staff_path)
 
-                transcription = self._get_symbol_labels(i, meidoc)
+                    transcription = self._get_symbol_labels(i, meidoc)
+                except:
+                    num_errors += 1
+                    continue
 
                 staves.append({'path': staff_path, 'symbols': transcription})
+
+        if self.verbose:
+            print "\tNumber of errors: %d" % num_errors
 
         return staves
            
@@ -341,7 +439,10 @@ class Homr(object):
             # for each system
             # important: need to iterate system by system because the class labels depend on the acting clef
             for staff_index in range(num_systems):
-                labels = self._get_symbol_labels(staff_index, meidoc)
+                try:
+                    labels = self._get_symbol_labels(staff_index, meidoc)
+                except IndexError:
+                    continue
 
                 # retrieve list of MeiElements that correspond to glyphs between system breaks
                 start_sb_pos = meidoc.getPositionInDocument(sbs[staff_index])
@@ -493,7 +594,7 @@ class Homr(object):
                 samp_size = self._feature_dims * 4 # 4 byte float
                 parm_kind = 9 # USER_DEFINED
                 
-                header = struct.pack('>iihh', n_samples, samp_period, samp_size, parm_kind)
+                header = struct.pack('>IIHH', n_samples, samp_period, samp_size, parm_kind)
                 f.write(header)
 
                 '''
