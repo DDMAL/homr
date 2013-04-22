@@ -74,8 +74,14 @@ class Homr(object):
         self.w = w if w else 2
         self.r = r if r else 0
 
-        # set after analysis
+        # member variables set after analysis
         self._feature_dims = 0
+
+        # set starting active clef to a c clef on the first line (position of 0)
+        self._acting_clef = {
+            'shape': 'c',
+            'position': 0
+        }
 
         init_gamera()
 
@@ -103,15 +109,16 @@ class Homr(object):
                     'mei': os.path.join(dirpath, mei_filename[0])
                 })
 
-        if self.verbose:
-            print '\tNumber of pages: %d' % len(pages)
-
         split_ind = int(train_proportion * len(pages))
         training_pages = pages[0:split_ind]
         if len(training_pages) < 1:
             raise ValueError('Invalid training proportion: no pages to train with')
 
         testing_pages = pages[split_ind:]
+
+        if self.verbose:
+            print '\tNumber of training pages: %d' % len(training_pages)
+            print '\tNumber of testing pages: %d' % len(testing_pages)
 
         self.train(training_pages)
         self.test(testing_pages)
@@ -379,20 +386,18 @@ class Homr(object):
         symbols = [s for s in flat_tree[start_sb_pos+1:end_sb_pos] if s.getName() in symbol_types]
 
         symbol_labels = []
-        acting_clef = None
         for s in symbols:
             if s.getName() == 'clef':
-                clef_shape = s.getAttribute('shape').value.lower()
-                position = (int(s.getAttribute('line').value) - 4) * 2
-                sname = '%sclef.%d' % (clef_shape, position)
-                acting_clef = s
+                self._acting_clef['shape'] = s.getAttribute('shape').value.lower()
+                self._acting_clef['position'] = (int(s.getAttribute('line').value) - 4) * 2
+                sname = '%sclef.%d' % (self._acting_clef['shape'], self._acting_clef['position'])
             elif s.getName() == 'division':
                 form = s.getAttribute('form').value.lower()
                 sname = '%sdivision' % form
             elif s.getName() == 'custos':
                 pname = s.getAttribute('pname').value
                 oct = int(s.getAttribute('oct').value)
-                staff_pos = Homr.get_staff_pos(pname, oct, acting_clef)
+                staff_pos = self._get_staff_pos(pname, oct)
                 sname = 'custos.%d' % staff_pos
             elif s.getName() == 'neume':
                 name = s.getAttribute('name').value.lower()
@@ -402,7 +407,7 @@ class Homr(object):
                 for n in notes:
                     pname = n.getAttribute('pname').value
                     oct = int(n.getAttribute('oct').value)
-                    staff_pos = Homr.get_staff_pos(pname, oct, acting_clef)
+                    staff_pos = self._get_staff_pos(pname, oct)
                     sname += '.%d' % staff_pos
 
                     if n.hasChildren('dot'):
@@ -474,8 +479,7 @@ class Homr(object):
 
         return symbol_widths
 
-    @staticmethod
-    def get_staff_pos(pname, oct, acting_clef=None):
+    def _get_staff_pos(self, pname, oct):
         '''
         Returns the numerical position of the pitch (in steps) relative to the top 
         line of the staff. For example, if the clef is a 'c' on the 2nd line from 
@@ -488,13 +492,9 @@ class Homr(object):
         ----------
         pname (String): pitch name of the note
         oct (int): octave of the note
-        acting_clef (MeiElement:clef): acting clef (the last clef before the note)
         '''
         
-        if not acting_clef:
-            raise ValueError('An acting clef can not be found, check mei structure.')
-
-        clef_shape = acting_clef.getAttribute('shape').value.lower()
+        clef_shape = self._acting_clef['shape']
         if clef_shape == 'c':
             clef_oct = 4
         elif clef_shape == 'f':
@@ -513,7 +513,7 @@ class Homr(object):
         if i_pitch < c_ind:
             clef_diff += num_chroma
 
-        clef_staff_pos = (int(acting_clef.getAttribute('line').value) - 4) * 2
+        clef_staff_pos = self._acting_clef['position']
         staff_pos = clef_staff_pos + clef_diff
 
         return staff_pos
@@ -619,4 +619,4 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     homr = Homr(args.dataroot, args.outputpath, args.winwidth, args.winoverlap, args.verbose)
-    homr.run_experiment1(0.02)
+    homr.run_experiment1(0.001)
