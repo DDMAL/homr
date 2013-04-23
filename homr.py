@@ -47,6 +47,9 @@ parser.add_argument('-w', '--winwidth', type=int, help='width of analysis window
 parser.add_argument('-r', '--winoverlap', type=int, help='number of overlapping pixels each time the window is moved')
 parser.add_argument('-v', '--verbose', help='increase output verbosity', action='store_true')
 
+# largest finite IEEE-754 float
+MAX_FLOAT = 3.4e38
+
 class Homr(object):
 
     feature_list = [f[0] for f in ImageBase.get_feature_functions()[0]]
@@ -256,6 +259,7 @@ class Homr(object):
             f.write(macro)
 
             # define hmm for each symbol
+            # ugly code because HTK decided to use malformed XML as an itermediary file format ... yay
             for s in sorted(symbol_widths.iterkeys()):
                 # calculate number of states of the HMM according to pugin2006
                 # add first and last terminal states (do not have an emission distribution)
@@ -350,6 +354,7 @@ class Homr(object):
                 staves.append({'path': staff_path, 'symbols': transcription})
 
         if self.verbose:
+            print "\tNumber of staves extracted: %d" % len(staves)
             print "\tNumber of errors: %d" % num_errors
 
         return staves
@@ -547,7 +552,6 @@ class Homr(object):
         if not os.path.exists(train_data_path):
             os.makedirs(train_data_path)
 
-
         # extract features for each staff
         for s in staves:
             staff_path = s['path']
@@ -606,7 +610,15 @@ class Homr(object):
                 for j in range(n_samples):
                     # for each feature
                     for i in range(self._feature_dims):
-                        feature = struct.pack('>f', staff_features[i,j])
+                        # clamp feature values to maximum IEEE floating point values for binary output
+                        if staff_features[i,j] > MAX_FLOAT:
+                            feature_val = MAX_FLOAT
+                        elif staff_features[i,j] < -MAX_FLOAT:
+                            feature_val = -MAX_FLOAT
+                        else:
+                            feature_val = staff_features[i,j]
+
+                        feature = struct.pack('>f', feature_val)
                         bin_data.extend(feature)
                 f.write(bin_data)
 
@@ -619,4 +631,4 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     homr = Homr(args.dataroot, args.outputpath, args.winwidth, args.winoverlap, args.verbose)
-    homr.run_experiment1(0.001)
+    homr.run_experiment1(0.90)
