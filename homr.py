@@ -141,7 +141,8 @@ class Homr(object):
 
         if self.verbose:
             print 'extracting features ...'
-        self._extract_features(staves)
+        feature_list = ['aspect_ratio', 'moments', 'volume64regions', 'nrows_feature']
+        self._extract_features(staves, feature_list)
         # at this point 'staves' is a list of dictionaries
         # each element s has s['path'], s['features'], and s['symbols']   
 
@@ -240,6 +241,7 @@ class Homr(object):
         # replicates the output of the HCompV tool (global mean/var)
         # (easier to just do it internally rather than making a system call
         # and concatenating output files
+        '''
         staff_means = np.zeros([self._feature_dims, len(staves)])
         staff_variances = np.zeros([self._feature_dims, len(staves)])
         for i, s in enumerate(staves):
@@ -250,6 +252,10 @@ class Homr(object):
         init_mean = np.nan_to_num(staff_means.mean(axis=1))
         init_var = np.nan_to_num(staff_variances.mean(axis=1))
         var_floor = np.nan_to_num(init_var * 0.01)
+        '''
+        init_mean = np.zeros(self._feature_dims)
+        init_var = init_mean
+        var_floor = init_var
         
         # calculate variances for each staff
         with open(hmm_def_path, 'w') as f:
@@ -264,6 +270,10 @@ class Homr(object):
                 # calculate number of states of the HMM according to pugin2006
                 # add first and last terminal states (do not have an emission distribution)
                 num_states = int(round(symbol_widths[s] / (self.w - self.r))) + 2
+                # set minimum number of internal states
+                if num_states < 3:
+                    num_states = 4
+
                 hmm_def = '~h "%s"\n\t<BeginHMM>\n\t\t<NumStates> %d\n' % (s, num_states)
 
                 for i in range(2,num_states):
@@ -576,7 +586,10 @@ class Homr(object):
                     feature_name = f[0]
                     feature_func = f[1]
                     dimensionality = feature_func.return_type.length
-                    features = feature_func.__call__(window_img)
+
+                    # get feature calculation function reference and call it
+                    # this seems to be the only way to calculate features where Gamera doesn't mem leak
+                    features = getattr(window_img, feature_name)()
                     staff_features[offset:offset+dimensionality, i] = features
 
                     offset += dimensionality
@@ -622,7 +635,7 @@ class Homr(object):
                         bin_data.extend(feature)
                 f.write(bin_data)
 
-            s['features'] = staff_features
+            del staff_features
 
         return staves
 
@@ -631,4 +644,4 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     homr = Homr(args.dataroot, args.outputpath, args.winwidth, args.winoverlap, args.verbose)
-    homr.run_experiment1(0.90)
+    homr.run_experiment1(0.05)
