@@ -141,7 +141,8 @@ class Homr(object):
 
         if self.verbose:
             print 'extracting features ...'
-        feature_list = ['aspect_ratio', 'moments', 'volume64regions', 'nrows_feature']
+        #feature_list = ['aspect_ratio', 'volume64regions', 'nrows_feature']
+        feature_list = ['black_area']
         self._extract_features(staves, feature_list)
         # at this point 'staves' is a list of dictionaries
         # each element s has s['path'], s['features'], and s['symbols']   
@@ -185,7 +186,7 @@ class Homr(object):
             dictionary.append('sp')
         dictionary.sort() # alphabetize
 
-        dict_path = os.path.join(self.outputpath, 'dictionary')
+        dict_path = os.path.join(self.outputpath, 'glyphs.dict')
         with open(dict_path, 'w') as f:
             f.write('\n'.join(dictionary))
 
@@ -232,7 +233,7 @@ class Homr(object):
         hmm_path = os.path.join(self.outputpath, 'hmm0')
         if not os.path.exists(hmm_path):
             os.makedirs(hmm_path)
-        hmm_def_path = os.path.join(hmm_path, 'hmmdefs')
+        hmm_def_path = os.path.join(hmm_path, 'hmm.def')
 
         # add silence symbol having 3 states
         symbol_widths['sil'] = 3 * (self.w - self.r)
@@ -241,7 +242,6 @@ class Homr(object):
         # replicates the output of the HCompV tool (global mean/var)
         # (easier to just do it internally rather than making a system call
         # and concatenating output files
-        '''
         staff_means = np.zeros([self._feature_dims, len(staves)])
         staff_variances = np.zeros([self._feature_dims, len(staves)])
         for i, s in enumerate(staves):
@@ -252,10 +252,6 @@ class Homr(object):
         init_mean = np.nan_to_num(staff_means.mean(axis=1))
         init_var = np.nan_to_num(staff_variances.mean(axis=1))
         var_floor = np.nan_to_num(init_var * 0.01)
-        '''
-        init_mean = np.zeros(self._feature_dims)
-        init_var = init_mean
-        var_floor = init_var
         
         # calculate variances for each staff
         with open(hmm_def_path, 'w') as f:
@@ -286,7 +282,7 @@ class Homr(object):
                 trans = np.zeros([num_states, num_states])
                 trans[0,1] = 1.0
                 for i in range(1,num_states-1):
-                    trans[i,i:] = 1/(num_states-i)
+                    trans[i,i:] = 1./(num_states-i)
                 hmm_def += '\t\t<TransP> %d\n' % num_states
                 for row in trans:
                     hmm_def += '\t\t\t%s\n' % ' '.join(['%E' % p for p in list(row)])
@@ -425,8 +421,11 @@ class Homr(object):
                     staff_pos = self._get_staff_pos(pname, oct)
                     sname += '.%d' % staff_pos
 
+                    # ignore dots and episema for now
+                    '''
                     if n.hasChildren('dot'):
                         sname += 'd'
+                    '''
             else:
                 continue
 
@@ -597,7 +596,7 @@ class Homr(object):
             # write binary feature file for the staff image being processed
             # the struct module is used to ensure proper bit padding
             filename = os.path.split(os.path.splitext(s['path'])[0])[1]
-            feature_path = os.path.join(train_data_path, '%s.mfc' % filename)
+            feature_path = os.path.join(train_data_path, '%s.dat' % filename)
             with open(feature_path, 'wb') as f:
                 '''
                 write header
@@ -635,7 +634,7 @@ class Homr(object):
                         bin_data.extend(feature)
                 f.write(bin_data)
 
-            del staff_features
+            s['features'] = staff_features
 
         return staves
 
@@ -644,4 +643,4 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     homr = Homr(args.dataroot, args.outputpath, args.winwidth, args.winoverlap, args.verbose)
-    homr.run_experiment1(0.05)
+    homr.run_experiment1(0.33)
