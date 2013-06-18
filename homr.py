@@ -37,6 +37,7 @@ from gamera.core import *
 import gamera.plugins.features as gfeatures
 import numpy as np
 import struct
+import subprocess
 from pymei import XmlImport
 
 # set up command line argument structure
@@ -289,6 +290,40 @@ class Homr(object):
 
                 hmm_def += '\t<EndHMM>\n'
                 f.write(hmm_def)
+
+    def _em_iter(self, num_iter=3, lb_pruning=100.0, ub_pruning=1000.0, inc_pruning=250.0):
+        '''
+        Re-estimate the HMM parameters using the expectation maximization algorithm.
+        The HTK book suggests to re-estimate the model 3 times before introducing the
+        intrastate silence model. Performs a system call to the HTK HERest program.
+
+        PARAMETERS
+        ----------
+        num_iter (int): number of times to re-estimate the HMM internal parameters
+        lb_pruning (float): lower bound pruning threshold for lattice
+        ub_pruning (float): upper bound pruning threshold for lattice
+        inc_pruning (float): amount to increment pruning threshold if 
+        '''
+
+        config_path = os.path.join(self.outputpath, 'options.cfg')
+        symbols_path = os.path.join(self.outputpath, 'symbols.mlf')
+        trainlist_path = os.path.join(self.outputpath, 'train.scp')
+        train_path = os.path.join(self.outputpath, 'train')
+        dict_path = os.path.join(self.outputpath, 'glyphs.dict')
+
+        # create list of training files to be processed
+        subprocess.call('ls %s/*.dat > %s' % (train_path, trainlist_path))
+
+        for i in range(num_iter):
+            current_hmm_path = os.path.join(self.outputpath, 'hmm%d/hmm.def' % i)
+            next_hmm_path = os.path.join(self.outputpath, 'hmm%d' % (i+1))
+            if not os.path.exists(next_hmm_path):
+                os.makedirs(next_hmm_path)
+
+            subprocess.call('HERest -C %s -t %.1f %.1f %.1f -I %s -S %s -H %s -M %s %s' % (
+                config_path, lb_pruning, inc_pruning, ub_pruning, symbols_path, 
+                trainlist_path, current_hmm_path, next_hmm_path, dict_path)
+            )
 
     def _extract_staves(self, pages, bb_padding_in=0.4):
         '''
