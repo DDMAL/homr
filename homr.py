@@ -327,14 +327,22 @@ class Homr(object):
         inc_pruning (float): amount to increment pruning threshold if 
         '''
 
+        # create config file
         config_path = os.path.join(self.outputpath, 'options.cfg')
+        with open(config_path, 'w') as f:
+            f.write('TARGETKIND = USER')
+        
+        # generate paths to other intermediary files
         symbols_path = os.path.join(self.outputpath, 'symbols.mlf')
         trainlist_path = os.path.join(self.outputpath, 'train.scp')
-        train_path = os.path.join(self.outputpath, 'train')
+        train_path = os.path.join(self.outputpath, 'data/train/features')
         dict_path = os.path.join(self.outputpath, 'glyphs.dict')
 
         # create list of training files to be processed
-        subprocess.call('ls %s/*.dat > %s' % (train_path, trainlist_path))
+        feature_paths = [os.path.join(train_path, fp) for fp in os.listdir(train_path)]
+        with open(trainlist_path, 'w') as f:
+            for fp in feature_paths:
+                f.write(fp + '\n')
 
         for i in range(num_iter):
             current_hmm_path = os.path.join(self.outputpath, 'hmm%d/hmm.def' % i)
