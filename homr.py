@@ -124,13 +124,14 @@ class Homr(object):
             print '\tNumber of training pages: %d' % len(training_pages)
             print '\tNumber of testing pages: %d' % len(testing_pages)
 
-        self.train(training_pages)
+        features = ['black_area']
+        self.train(training_pages, features)
 
         #self.test(testing_pages)
         # for now only test on 50 pages
-        self.test(testing_pages[:50])
+        self.test(testing_pages[:50], features)
 
-    def train(self, training_pages):
+    def train(self, training_pages, features=feature_list):
         '''
         Trains the model using the given list of training pages.
 
@@ -147,9 +148,8 @@ class Homr(object):
 
         if self.verbose:
             print 'extracting features ...'
-        feature_list = ['black_area']
         feature_path = os.path.join(self.outputpath, 'data/train/features')
-        self._extract_features(staves, feature_path, feature_list, True)
+        self._extract_features(staves, feature_path, features, True)
         # at this point 'staves' is a list of dictionaries
         # each element s has s['path'], s['features'], and s['symbols']   
 
@@ -169,7 +169,7 @@ class Homr(object):
 
         self._em_iter(3)
 
-    def test(self, testing_pages):
+    def test(self, testing_pages, features=feature_list):
         '''
         Tests the model using the given list of testing pages.
 
@@ -186,9 +186,8 @@ class Homr(object):
 
         if self.verbose:
             print 'extracting features ...'
-        feature_list = ['black_area']
         feature_path = os.path.join(self.outputpath, 'data/test/features')
-        self._extract_features(staves, feature_path, feature_list, False)
+        self._extract_features(staves, feature_path, features, False)
 
     def _create_dictionary_file(self, staves_symbols, inc_sil=False, inc_sp=False):
         '''
