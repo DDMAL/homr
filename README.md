@@ -7,7 +7,14 @@ Dependencies
 ------------
 
 * Python 2.7
-* PIL
+* NumPy
+* Gamera
+* PyMei
+
+Usage
+-----
+
+python homr.py /path/to/data /path/to/intermediary/output
 
 Developers
 ----------
