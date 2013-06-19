@@ -125,6 +125,7 @@ class Homr(object):
             print '\tNumber of testing pages: %d' % len(testing_pages)
 
         self.train(training_pages)
+
         #self.test(testing_pages)
         # for now only test on 50 pages
         self.test(testing_pages[:50])
@@ -165,6 +166,8 @@ class Homr(object):
         if self.verbose:
             print 'generating hmm topologies ...'
         self._create_hmm_file(staves, symbol_widths)
+
+        self._em_iter(3)
 
     def test(self, testing_pages):
         '''
@@ -345,15 +348,19 @@ class Homr(object):
                 f.write(fp + '\n')
 
         for i in range(num_iter):
+            if self.verbose:
+                print 'Estimating optimal HMM parameters (iteration %d/%d) ...' % (i+1, num_iter)
+
             current_hmm_path = os.path.join(self.outputpath, 'hmm%d/hmm.def' % i)
             next_hmm_path = os.path.join(self.outputpath, 'hmm%d' % (i+1))
             if not os.path.exists(next_hmm_path):
                 os.makedirs(next_hmm_path)
 
-            subprocess.call('HERest -C %s -t %.1f %.1f %.1f -I %s -S %s -H %s -M %s %s' % (
+            em_cmd = 'HERest -C %s -t %.1f %.1f %.1f -I %s -S %s -H %s -M %s %s' % (
                 config_path, lb_pruning, inc_pruning, ub_pruning, symbols_path, 
-                trainlist_path, current_hmm_path, next_hmm_path, dict_path)
+                trainlist_path, current_hmm_path, next_hmm_path, dict_path
             )
+            subprocess.call(em_cmd, shell=True)
 
     def _extract_staves(self, pages, staff_data_path, bb_padding_in=0.4):
         '''
