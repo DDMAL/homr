@@ -153,8 +153,6 @@ class Homr(object):
         # at this point 'staves' is a list of dictionaries
         # each element s has s['path'], s['features'], and s['symbols']   
 
-        if self.verbose:
-            print 'generating dictionary ...'
         dictionary = self._create_dictionary_file([s['symbols'] for s in staves], True)
 
         if self.verbose:
@@ -211,9 +209,36 @@ class Homr(object):
             dictionary.append('sp')
         dictionary.sort() # alphabetize
 
+        # create glyph list file (monophone0)
+        if self.verbose:
+            print 'generating glyph list ...'
+        glyph_path = os.path.join(self.outputpath, 'glyphs.list')
+        with open(glyph_path, 'w') as f:
+            f.write('\n'.join(dictionary))
+
+        # create task grammar file (gram)
+        if self.verbose:
+            print 'generating task grammar ...'
+        grammar_path = os.path.join(self.outputpath, 'grammar')
+        with open(grammar_path, 'w') as f:
+            f.write('$glyph = ' + ' | '.join(dictionary) + ';\n')
+            f.write('(SENT-START (<$glyph>) SENT-END)')
+
+        # create word net (wdnet)
+        if self.verbose:
+            print 'generating word net ...'
+        wdnet_path = os.path.join(self.outputpath, 'wdnet')
+        wdnet_cmd = 'HParse %s %s' % (grammar_path, wdnet_path)
+        subprocess.call(wdnet_cmd, shell=True)
+
+        # create dictionary. In the case of OMR, the dictionary maps
+        # glyph names to glyph names, instead of words to sequences of phonemes.
+        if self.verbose:
+            print 'generating dictionary ...'
         dict_path = os.path.join(self.outputpath, 'glyphs.dict')
         with open(dict_path, 'w') as f:
-            f.write('\n'.join(dictionary))
+            for g in dictionary:
+                f.write('%s %s\n' % (g, g))
 
         return dictionary
 
@@ -338,7 +363,7 @@ class Homr(object):
         symbols_path = os.path.join(self.outputpath, 'symbols.mlf')
         trainlist_path = os.path.join(self.outputpath, 'train.scp')
         train_path = os.path.join(self.outputpath, 'data/train/features')
-        dict_path = os.path.join(self.outputpath, 'glyphs.dict')
+        dict_path = os.path.join(self.outputpath, 'glyphs.list')
 
         # create list of training files to be processed
         feature_paths = [os.path.join(train_path, fp) for fp in os.listdir(train_path)]
