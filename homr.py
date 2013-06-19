@@ -125,7 +125,9 @@ class Homr(object):
             print '\tNumber of testing pages: %d' % len(testing_pages)
 
         self.train(training_pages)
-        self.test(testing_pages)
+        #self.test(testing_pages)
+        # for now only test on 50 pages
+        self.test(testing_pages[:50])
 
     def train(self, training_pages):
         '''
@@ -137,14 +139,16 @@ class Homr(object):
         '''
         
         if self.verbose:
+            print '\nTRAINING\n--------'
             print 'extracting staves ...'
-        staves = self._extract_staves(training_pages)
+        staff_data_path = os.path.join(self.outputpath, 'data/train/staves')
+        staves = self._extract_staves(training_pages, staff_data_path)
 
         if self.verbose:
             print 'extracting features ...'
-        #feature_list = ['aspect_ratio', 'volume64regions', 'nrows_feature']
         feature_list = ['black_area']
-        self._extract_features(staves, feature_list)
+        feature_path = os.path.join(self.outputpath, 'data/train/features')
+        self._extract_features(staves, feature_path, feature_list, True)
         # at this point 'staves' is a list of dictionaries
         # each element s has s['path'], s['features'], and s['symbols']   
 
@@ -163,7 +167,25 @@ class Homr(object):
         self._create_hmm_file(staves, symbol_widths)
 
     def test(self, testing_pages):
-        pass
+        '''
+        Tests the model using the given list of testing pages.
+
+        PARAMETERS
+        ----------
+        testing_pages (list): list of {image, mei} file paths to use for testing
+        '''
+
+        if self.verbose:
+            print '\nTESTING\n-------'
+            print 'extracting staves ...'
+        staff_data_path = os.path.join(self.outputpath, 'data/test/staves')
+        staves = self._extract_staves(testing_pages, staff_data_path)
+
+        if self.verbose:
+            print 'extracting features ...'
+        feature_list = ['black_area']
+        feature_path = os.path.join(self.outputpath, 'data/test/features')
+        self._extract_features(staves, feature_path, feature_list, False)
 
     def _create_dictionary_file(self, staves_symbols, inc_sil=False, inc_sp=False):
         '''
@@ -325,7 +347,7 @@ class Homr(object):
                 trainlist_path, current_hmm_path, next_hmm_path, dict_path)
             )
 
-    def _extract_staves(self, pages, bb_padding_in=0.4):
+    def _extract_staves(self, pages, staff_data_path, bb_padding_in=0.4):
         '''
         Extracts the staves from the image given the bounding
         boxes encoded in the corresponding mei document.
@@ -335,6 +357,7 @@ class Homr(object):
         PARAMETERS
         ----------
         pages (list): a list of pages
+        staff_data_path (string): path to output the staff images
         bb_padding_in (float): number of inches to pad system bounding boxes in the y plane
         '''
 
@@ -380,7 +403,6 @@ class Homr(object):
                     staff_image = staff_image.scale(scale_factor, 1)
 
                     # create staff data directory if it does not already exist
-                    staff_data_path = os.path.join(self.outputpath, 'data')
                     if not os.path.exists(staff_data_path):
                         os.makedirs(staff_data_path)
 
@@ -567,7 +589,7 @@ class Homr(object):
 
         return staff_pos
 
-    def _extract_features(self, staves, feature_names=feature_list):
+    def _extract_features(self, staves, features_data_path, feature_names=feature_list, save_features=False):
         '''
         Perform feature extraction on sliding analysis windows
         of each staff.
@@ -578,6 +600,7 @@ class Homr(object):
         PARAMETERS
         ----------
         staves (list of {image_path, symbol transcription})
+        features_data_path (string): path to output feature files
         feature_names (list of strings): list of gamera feature function names to be run on each analysis window.
             List of feature function names:
                 [black_area, moments, nholes, nholes_extended, volume, area, aspect_ratio, 
@@ -592,9 +615,8 @@ class Homr(object):
         self._feature_dims = features_info[1]
 
         # create training data directory if it does not already exist
-        train_data_path = os.path.join(self.outputpath, 'train')
-        if not os.path.exists(train_data_path):
-            os.makedirs(train_data_path)
+        if not os.path.exists(features_data_path):
+            os.makedirs(features_data_path)
 
         # extract features for each staff
         for s in staves:
@@ -631,7 +653,7 @@ class Homr(object):
             # write binary feature file for the staff image being processed
             # the struct module is used to ensure proper bit padding
             filename = os.path.split(os.path.splitext(s['path'])[0])[1]
-            feature_path = os.path.join(train_data_path, '%s.dat' % filename)
+            feature_path = os.path.join(features_data_path, '%s.dat' % filename)
             with open(feature_path, 'wb') as f:
                 '''
                 write header
@@ -669,7 +691,10 @@ class Homr(object):
                         bin_data.extend(feature)
                 f.write(bin_data)
 
-            s['features'] = staff_features
+            if save_features:
+                s['features'] = staff_features
+            else:
+                del staff_features
 
         return staves
 
@@ -678,4 +703,4 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     homr = Homr(args.dataroot, args.outputpath, args.winwidth, args.winoverlap, args.verbose)
-    homr.run_experiment1(0.33)
+    homr.run_experiment1(0.1)
