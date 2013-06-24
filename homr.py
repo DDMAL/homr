@@ -201,8 +201,32 @@ class Homr(object):
             for fp in feature_paths:
                 f.write(fp + '\n')
 
-        # TODO: transcribe test staves to recout.mlf
-        # HVite -H hmm3/hmm.def -S test.scp -l '*' -i recout.mlf -w wdnet -p 0.0 -s 5.0 glyphs.dict glyphs.list 
+        # transcribe test staves to recout.mlf
+        self._transcribe_staves()
+
+    def _transcribe_staves(self):
+        '''
+        Transcribes the array of features extracted from staves
+        HVite -H hmm3/hmm.def -S test.scp -l '*' -i recout.mlf -w wdnet -p 0.0 -s 5.0 glyphs.dict glyphs.list 
+        '''
+
+        if self.verbose:
+            print 'transcribing ...'
+
+        # find most recently trained hmm model
+        hmm_model = [p for p in os.walk('./hmm').next()[1] if p.startswith('hmm')][-1]
+        hmm_model_path = os.path.join(self.outputpath, 'hmm', hmm_model, 'hmm.def')
+
+        testlist_path = os.path.join(self.outputpath, 'test.scp')
+        outputlabel_path = os.path.join(self.outputpath, 'recout.mlf')
+        wdnet_path = os.path.join(self.outputpath, 'wdnet')
+        glyphdict_path = os.path.join(self.outputpath, 'glyphs.dict')
+        glyphlist_path = os.path.join(self.outputpath, 'glyphs.list')
+
+        hv_cmd = "HVite -H %s -S %s -l '*' -i %s -w %s -p 0.0 -s 5.0 %s %s" % (
+            hmm_model_path, testlist_path, outputlabel_path, wdnet_path, glyphdict_path, glyphlist_path
+        )
+        subprocess.call(hv_cmd, shell=True)
 
     def _create_dictionary_file(self, staves_symbols, inc_sil=False, inc_sp=False):
         '''
