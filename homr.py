@@ -124,12 +124,13 @@ class Homr(object):
             print '\tNumber of training pages: %d' % len(training_pages)
             print '\tNumber of testing pages: %d' % len(testing_pages)
 
-        features = ['black_area']
+        # gamera feature selection
+        # there's no empirical evidence supporting these features. I just selected a subset to try
+        #features = ['black_area', 'volume16regions', 'nholes', 'top_bottom', 'skeleton_features']
+        features = ['black_area', 'volume64regions']
         self.train(training_pages, features)
 
-        #self.test(testing_pages)
-        # for now only test on 50 pages
-        self.test(testing_pages[:50], features)
+        self.test(testing_pages, features)
 
     def train(self, training_pages, features=feature_list):
         '''
@@ -157,7 +158,8 @@ class Homr(object):
 
         if self.verbose:
             print 'creating symbol transcriptions ...'
-        self._create_label_file(staves)
+        label_path = os.path.join(self.outputpath, 'trainsymbols.mlf')
+        self._create_label_file(staves, label_path, True)
 
         symbol_widths = self._get_symbol_widths(training_pages)
 
@@ -186,6 +188,21 @@ class Homr(object):
             print 'extracting features ...'
         feature_path = os.path.join(self.outputpath, 'data/test/features')
         self._extract_features(staves, feature_path, features, False)
+
+        if self.verbose:
+            print 'creating symbol transcriptions ...'
+        label_path = os.path.join(self.outputpath, 'testsymbols.mlf')
+        self._create_label_file(staves, label_path, False)
+
+        # create list of testing files to be processed
+        testlist_path = os.path.join(self.outputpath, 'test.scp')
+        feature_paths = [os.path.join(feature_path, fp) for fp in os.listdir(feature_path)]
+        with open(testlist_path, 'w') as f:
+            for fp in feature_paths:
+                f.write(fp + '\n')
+
+        # TODO: transcribe test staves to recout.mlf
+        # HVite -H hmm3/hmm.def -S test.scp -l '*' -i recout.mlf -w wdnet -p 0.0 -s 5.0 glyphs.dict glyphs.list 
 
     def _create_dictionary_file(self, staves_symbols, inc_sil=False, inc_sp=False):
         '''
@@ -222,7 +239,7 @@ class Homr(object):
         grammar_path = os.path.join(self.outputpath, 'grammar')
         with open(grammar_path, 'w') as f:
             f.write('$glyph = ' + ' | '.join(dictionary) + ';\n')
-            f.write('(SENT-START (<$glyph>) SENT-END)')
+            f.write('(<$glyph>)')
 
         # create word net (wdnet)
         if self.verbose:
@@ -238,11 +255,15 @@ class Homr(object):
         dict_path = os.path.join(self.outputpath, 'glyphs.dict')
         with open(dict_path, 'w') as f:
             for g in dictionary:
-                f.write('%s %s\n' % (g, g))
+                if g == 'sil':
+                    # do not output silence symbols in the transcriptions
+                    f.write('sil [] sil\n')
+                else:
+                    f.write('%s %s\n' % (g, g))
 
         return dictionary
 
-    def _create_label_file(self, staves):
+    def _create_label_file(self, staves, label_path, train=True):
         '''
         Create an htk Master Label File (.mlf) for a list of symbol 
         transcriptions for each staff in the dataset.
@@ -250,6 +271,8 @@ class Homr(object):
         PARAMETERS
         ----------
         staves: list of staves (paths, features, symbol transcriptions)
+        label_path (string): path to write the staff transcriptions
+        train (boolean): label file for testing or training
         '''
 
         mlf = '#!MLF!#\n'
@@ -257,13 +280,15 @@ class Homr(object):
             _, image_filename = os.path.split(s['path'])
             filename, _ = os.path.splitext(image_filename)
             mlf += '"*/%s.lab"\n' % filename
-            mlf += 'sil\n'
+            if train:
+                mlf += 'sil\n'
             for symbol in s['symbols']:
                 mlf += '%s\n' % symbol
-            mlf += 'sil\n.\n'
+            if train:
+                mlf += 'sil\n'
+            mlf += '.\n'
 
         # write master label file
-        label_path = os.path.join(self.outputpath, 'symbols.mlf')
         with open(label_path, 'w') as f:
             f.write(mlf)
 
@@ -303,6 +328,11 @@ class Homr(object):
         init_var = np.nan_to_num(staff_variances.mean(axis=1))
         var_floor = np.nan_to_num(init_var * 0.01)
         
+        # free up feature cache after calculating central tendency and dispersion
+        # of prototype HMM models
+        for s in staves:
+            del s['features']
+
         # calculate variances for each staff
         with open(hmm_def_path, 'w') as f:
             # write macros
@@ -360,7 +390,7 @@ class Homr(object):
             f.write('TARGETKIND = USER')
         
         # generate paths to other intermediary files
-        symbols_path = os.path.join(self.outputpath, 'symbols.mlf')
+        symbols_path = os.path.join(self.outputpath, 'trainsymbols.mlf')
         trainlist_path = os.path.join(self.outputpath, 'train.scp')
         train_path = os.path.join(self.outputpath, 'data/train/features')
         dict_path = os.path.join(self.outputpath, 'glyphs.list')
@@ -742,4 +772,5 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     homr = Homr(args.dataroot, args.outputpath, args.winwidth, args.winoverlap, args.verbose)
-    homr.run_experiment1(0.1)
+    # train on 95% of the dataset, test on 5% of music scores
+    homr.run_experiment1(0.95)
